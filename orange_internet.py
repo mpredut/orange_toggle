@@ -43,7 +43,7 @@ FOLDER    = os.path.dirname(os.path.abspath(__file__))
 
 
 async def ss(page, name):
-    path = os.path.join(FOLDER, f"debug_{name}.png")
+    path = os.path.join(FOLDER, "debug", f"debug_{name}.png")
     await page.screenshot(path=path, full_page=True)
     log.info(f"  📸 {path}")
 
@@ -96,7 +96,7 @@ async def login(page):
     await password_input.fill(PASSWORD)
     log.info("  ✓ Parola completată")
 
-    await ss(page, "02_filled")
+    await ss(page, "01_pass_filled")
 
     # 6. Click login (ID direct = 100% sigur)
     log.info("  Click login...")
@@ -104,19 +104,19 @@ async def login(page):
     await login_btn.wait_for(state="visible", timeout=10000)
 
     await login_btn.click()
-    await ss(page, "login_clicked")
+    await ss(page, "01_login_clicked")
     #print(await page.content())
 
     # 7. Așteaptă navigare după login
     try:
-        await page.wait_for_load_state("networkidle", timeout=15000)
+        await page.wait_for_load_state("domcontentloaded", timeout=15000)
     except:
         pass
 
     await page.wait_for_timeout(5000)
 
     log.info(f"  URL după login: {page.url}")
-    await ss(page, "03_after_login")
+    await ss(page, "01_after_login")
 
     # 8. Verificare simplă (foarte important)
     if "login" in page.url.lower():
@@ -129,7 +129,7 @@ async def select_phone_number(page, phone_number: str):
     Selectează numărul de telefon din panelul 'Tip abonament'.
     phone_number: ex. "0774004205"
     """
-    log.info(f"▶ Select phone number: {phone_number}")
+    log.info(f"▶ STEP 2: Select phone number: {phone_number}")
     
     # Așteptăm panelul să apară (Angular îl randează async)
     # Din screenshot, panelul are "Tip abonament" ca titlu
@@ -143,7 +143,7 @@ async def select_phone_number(page, phone_number: str):
     except PlaywrightTimeout:
         log.warning("  ⚠️ Panel 'abonament' nu a apărut")
 
-    await ss(page, "06_phone_selector_panel")
+    await ss(page, "02_phone_selector_panel")
 
     # Strategia 1: caută direct după textul numărului de telefon
     try:
@@ -152,7 +152,7 @@ async def select_phone_number(page, phone_number: str):
         await phone_loc.click()
         log.info(f"  ✓ Click direct pe număr: {phone_number}")
         await page.wait_for_timeout(1500)
-        await ss(page, "06b_after_phone_select")
+        await ss(page, "02_after_phone_select")
         return True
     except PlaywrightTimeout:
         log.warning(f"  ⚠️ Nu am găsit text='{phone_number}' direct")
@@ -166,7 +166,7 @@ async def select_phone_number(page, phone_number: str):
         await card.click()
         log.info(f"  ✓ Click pe card cu numărul: {phone_number}")
         await page.wait_for_timeout(1500)
-        await ss(page, "06b_after_phone_select")
+        await ss(page, "02_after_phone_select")
         return True
     except PlaywrightTimeout:
         log.warning("  ⚠️ Nu am găsit cardul cu numărul")
@@ -195,175 +195,115 @@ async def select_phone_number(page, phone_number: str):
         if clicked:
             log.info(f"  ✓ Click via JS evaluate pe: {phone_number}")
             await page.wait_for_timeout(1500)
-            await ss(page, "06b_after_phone_select")
+            await ss(page, "02_after_phone_select")
             return True
     except Exception as e:
         log.warning(f"  ⚠️ JS evaluate failed: {e}")
 
-    await ss(page, "ERROR_phone_not_found")
+    await ss(page, "02_ERROR_phone_not_found")
     log.error(f"  ✗ Nu am putut selecta numărul {phone_number}")
     return False
 
 async def go_to_servicii(page):
-    log.info("▶ STEP 2: Navighez la Servicii")
-    # Din screenshot 1: sidebar stânga are "Servicii" cu iconița de chat
-    clicked = False
-    for sel in [
-        # Sidebar stânga — link sau buton cu textul exact
-        "a:has-text('Servicii'):visible",
-        "li:has-text('Servicii') a:visible",
-        "[href*='servicii']:visible",
-        # fallback text match
-        "text='Servicii'",
-    ]:
-        try:
-            #loc = page.locator(sel).first
-            #loc = page.locator("a").filter(has_text="Servicii").filter(has_not_text="SIM").first
-            loc = page.locator("//a[normalize-space()='Servicii']").first
-            await loc.wait_for(state="visible", timeout=5000)
-            await loc.click()
-            await page.wait_for_load_state("networkidle", timeout=5000)
-            log.info(f"  ✓ Click Servicii ({sel}) → {page.url}")
-            clicked = True
-            break
-        except PlaywrightTimeout:
-            continue
+    log.info("▶ STEP 3: Navighez la Servicii")
+    url = f"{BASE_URL}/myaccount/reshape/services/summary"
+    log.info(f"  Direct URL: {url}")
+    await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+    await page.wait_for_timeout(15000)
 
-    if not clicked:
-        url = f"{BASE_URL}/myaccount/reshape/services/summary"
-        log.info(f"  Direct URL: {url}")
-        await page.goto(url, wait_until="networkidle", timeout=5000)
-
-    await page.wait_for_timeout(1500)
-    await ss(page, "04_servicii")
+    await ss(page, "03_servicii")
 
 
 async def click_detalii_voce(page):
-    """
-    Din screenshot 1: primul card (Voce) are textul
-    'Poti activa sau dezactiva mesageria vocala, internetul mobil...'
-    și un link 'Detalii' la bază.
-    """
-    log.info("▶ STEP 3: Click 'Detalii' pe cardul Voce")
-    clicked = False
-
-    # Strategie 1: cardul care conține "Internetul mobil" → Detalii din el
-    for card_text in ["Internetul mobil", "mesageria vocala", "dezactiva"]:
-        try:
-            card = page.locator(f"div:has-text('{card_text}')").first
-            await card.wait_for(state="visible", timeout=5000)
-            detalii = card.locator("text=Detalii").first
-            await detalii.wait_for(state="visible", timeout=4000)
-            await detalii.click()
-            log.info(f"  ✓ Click Detalii (card cu '{card_text}')")
+    log.info("▶ STEP 4: Click 'Detalii' pe cardul Voce")
+   
+    for url in [
+        f"{BASE_URL}/myaccount/reshape/services/voice",
+        f"{BASE_URL}/my-orange/services/voice",
+    ]:
+        log.info(f"  URL direct: {url}")
+        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        if "voice" in page.url:
             clicked = True
             break
-        except PlaywrightTimeout:
-            continue
 
-    # Strategie 2: primul "Detalii" din pagină
-    if not clicked:
-        try:
-            detalii = page.locator("a:has-text('Detalii'), button:has-text('Detalii')").first
-            await detalii.wait_for(state="visible", timeout=6000)
-            await detalii.click()
-            log.info("  ✓ Click primul Detalii din pagină")
-            clicked = True
-        except PlaywrightTimeout:
-            pass
-
-    # Strategie 3: URL direct
-    if not clicked:
-        for url in [
-            f"{BASE_URL}/myaccount/reshape/services/voice",
-            f"{BASE_URL}/my-orange/services/voice",
-        ]:
-            log.info(f"  URL direct: {url}")
-            await page.goto(url, wait_until="networkidle", timeout=20000)
-            if "voice" in page.url:
-                clicked = True
-                break
-
-    await page.wait_for_load_state("networkidle", timeout=15000)
-    await page.wait_for_timeout(1500)
-    await ss(page, "05_voce_page")
+    await page.wait_for_load_state("domcontentloaded", timeout=15000)
+    await page.wait_for_timeout(2500)
+    await ss(page, "04_voce_page")
     log.info(f"  URL: {page.url}")
 
 
 async def select_voce_tab(page):
-    """Din screenshot 2: tab-uri sus → Sumar | Voce | Telefoane | Orange care
-    <div _ngcontent-fkr-c199="" class="d-flex align-items-center justify-content-between"><oro-switch _ngcontent-fkr-c199="" _nghost-fkr-c198=""><button _ngcontent-fkr-c198="" id="oro-service-modify" triggers="click" placement="bottom" containerclass="popover-dark" class="switch switch-btn on"><span _ngcontent-fkr-c198="" class="tooltip-icon"></span></button><!----></oro-switch></div>
-    """
-    log.info("▶ STEP 4: Selectez tab 'Voce'")
+    log.info("▶ STEP 5: Selectez tab 'Voce'")
     try:
         tab = page.locator("a:has-text('Voce'), button:has-text('Voce'), [role='tab']:has-text('Voce')").first
         await tab.wait_for(state="visible", timeout=6000)
         await tab.click()
-        await page.wait_for_load_state("networkidle", timeout=10000)
+        await page.wait_for_load_state("domcontentloaded", timeout=15000)
         log.info("  ✓ Tab Voce selectat")
     except PlaywrightTimeout:
         log.info("  Tab Voce nu găsit — probabil deja pe pagina corectă.")
-    await page.wait_for_timeout(1500)
-    await ss(page, "06_voce_tab")
-
+    await page.wait_for_timeout(200)
+    await ss(page, "05_voce_tab")
 
 async def confirm_modal(page, action: str):
-    """Confirmă modalul după click pe toggle."""
+    """Confirmă modalul după click pe toggle (variantă stabilă Angular)."""
     log.info("  ▶ Aștept modal confirmare...")
-    
-    # Textul exact din buton depinde de acțiune
+
+    # Texte posibile în funcție de acțiune
     if action == "enable":
-        btn_texts = ["Activeaza", "Activează", "Confirmă", "Confirm", "Da", "OK"]
+        texts = ["Activeaza", "Activează", "Confirmă", "Confirm", "Da", "OK"]
     else:
-        btn_texts = ["Dezactiveaza", "Dezactivează", "Confirmă", "Confirm", "Da", "OK"]
-    
-    # Așteptăm să apară modalul (Angular modal)
-    modal_sel = "modal-container, [role='dialog'], .modal, .modal-dialog"
+        texts = ["Dezactiveaza", "Dezactivează", "Confirmă", "Confirm", "Da", "OK"]
+
+    # 1️⃣ Așteaptă modalul REAL
     try:
-        await page.wait_for_selector(modal_sel, state="visible", timeout=8000)
-        log.info("  ✓ Modal detectat")
+        dialog = page.locator("modal-container").first
+        await dialog.wait_for(state="visible", timeout=8000)
+        log.info("  ✓ Modal detectat (modal-container)")
     except PlaywrightTimeout:
-        log.warning("  ⚠️ Modal nu a apărut în 8s")
-    
-    # Încercăm fiecare text de buton
-    for text in btn_texts:
+        await ss(page, "05_ERROR_no_modal")
+        log.error("  ✗ Modalul nu a apărut!")
+        return False
+
+    # 2️⃣ Caută buton DOAR în modal (IMPORTANT)
+    for text in texts:
         try:
-            # Folosim get_by_role pentru precizie maximă
-            btn = page.get_by_role("button", name=text, exact=True)
-            await btn.wait_for(state="visible", timeout=3000)
-            await btn.click()
-            log.info(f"  ✓ Click pe buton: '{text}'")
-            return True
-        except PlaywrightTimeout:
-            pass
-        
-        # Fallback cu locator text
-        try:
-            btn = page.locator(f"button:text-is('{text}')").first
+            btn = dialog.locator(f"button:has-text('{text}'), a:has-text('{text}')").first
             await btn.wait_for(state="visible", timeout=2000)
             await btn.click()
-            log.info(f"  ✓ Click text-is: '{text}'")
+            log.info(f"  ✓ Confirmat cu: '{text}'")
             return True
         except PlaywrightTimeout:
-            pass
-    
-    # Ultimul fallback: orice buton portocaliu/primary din modal
+            continue
+
+    # 3️⃣ Fallback inteligent (buton submit din modal)
     try:
-        btn = page.locator(
-            "modal-container button.btn-primary, "
-            "modal-container button[class*='orange'], "
-            "modal-container button[style*='background'], "
-            "[role='dialog'] button.btn-primary"
-        ).first
-        await btn.wait_for(state="visible", timeout=4000)
-        text = await btn.text_content()
-        log.info(f"  ✓ Click buton primary din modal: '{text}'")
+        btn = dialog.locator("button[type='submit']").first
+        await btn.wait_for(state="visible", timeout=3000)
+
+        txt = await btn.text_content()
+        log.info(f"  ✓ Fallback submit: '{txt}'")
+
         await btn.click()
         return True
     except PlaywrightTimeout:
         pass
-    
-    await ss(page, "ERROR_modal_not_confirmed")
+
+    # 4️⃣ Ultim fallback (primul buton vizibil din modal)
+    try:
+        btn = dialog.locator("button").filter(has_text="").first
+        await btn.wait_for(state="visible", timeout=3000)
+
+        txt = await btn.text_content()
+        log.warning(f"  ⚠️ Fallback generic button: '{txt}'")
+
+        await btn.click()
+        return True
+    except PlaywrightTimeout:
+        pass
+
+    await ss(page, "05_ERROR_modal_not_confirmed")
     log.error("  ✗ Nu am putut confirma modalul!")
     return False
 
@@ -374,7 +314,7 @@ async def toggle_internet(page, action: str):
     Trebuie să găsim toggle-ul din primul card.
     """
     log.info(f"▶ STEP 5: Toggle Internet Mobil → {action.upper()}")
-    await page.wait_for_timeout(1500)
+    await page.wait_for_timeout(2500)
 
     # Găsim cardul "Internet mobil" — din screenshot titlul e h2/h3/div bold
     card = None
@@ -412,7 +352,7 @@ async def toggle_internet(page, action: str):
             continue
 
     if toggle is None:
-        await ss(page, "ERROR_no_toggle")
+        await ss(page, "05_ERROR_no_toggle")
         raise RuntimeError("Nu am găsit toggle-ul Internet mobil! Vezi debug_ERROR_no_toggle.png")
 
     # Stare curentă
@@ -435,9 +375,9 @@ async def toggle_internet(page, action: str):
     await toggle.scroll_into_view_if_needed()
     await toggle.click()
     await page.wait_for_timeout(2000)
-    await ss(page, "07_after_click_on_toggle")
+    await ss(page, "05_after_click_on_toggle")
 
-    await ss(page, "DEBUG_before_confirm")
+    await ss(page, "05_DEBUG_before_confirm_toggle")
 
     # Dump toate butoanele vizibile
     #buttons = page.locator("button:visible")
@@ -451,97 +391,6 @@ async def toggle_internet(page, action: str):
         log.warning("  ⚠️ Nu am reușit să confirm modificarea. Verifică debug_ERROR_modal_not_confirmed.png")
         #return
     
-    # Dialog de confirmare: trebuie click pe butonul principal din modal (Activează/Dezactivează)
-    confirm_selectors = [
-        "[role='dialog'] button:has-text('Dezactivează')",
-        "[role='dialog'] button:has-text('Dezactiveaza')",
-        "[role='dialog'] button:has-text('Activează')",
-        "[role='dialog'] button:has-text('Activeaza')",
-        "[role='dialog'] button:has-text('Confirmă')",
-        "[role='dialog'] button:has-text('Confirm')",
-        "[role='dialog'] button:has-text('Da')",
-        "[role='dialog'] button:has-text('OK')",
-        "[role='dialog'] button:has-text('Continuă')",
-        "[role='dialog'] button:has-text('Aplică')",
-        "button:has-text('Dezactivează')",
-        "button:has-text('Dezactiveaza')",
-        "button:has-text('Activează')",
-        "button:has-text('Activeaza')",
-        "button:has-text('Confirmă')",
-        "button:has-text('Confirm')",
-    ]
-
-    clicked_confirm = False
-    for sel in confirm_selectors:
-        try:
-            btn = page.locator(sel).first
-            await btn.wait_for(state="visible", timeout=4000)
-            await btn.click()
-            log.info(f"  ✓ Confirmat: '{sel}'")
-            clicked_confirm = True
-            break
-        except PlaywrightTimeout:
-            continue
-
-    # Fallback explicit pe text din modal (dacă selecția de sus nu a prins)
-    if not clicked_confirm:
-        try:
-            # 1) Evităm dialogul de confidențialitate, țintim modalul de confirmare real
-            dialog = page.locator("modal-container").first
-            await dialog.wait_for(state="visible", timeout=5000)
-
-            confirm_btn = dialog.locator(
-                "button:has-text('Dezactivează'), button:has-text('Dezactiveaza'), "
-                "button:has-text('Activează'), button:has-text('Activeaza'), "
-                "button:has-text('Confirmă'), button:has-text('Confirm'), "
-                "a:has-text('Dezactivează'), a:has-text('Dezactiveaza'), "
-                "a:has-text('Activează'), a:has-text('Activeaza'), "
-                "a:has-text('Confirmă'), a:has-text('Confirm')"
-            ).first
-
-            await confirm_btn.wait_for(state="visible", timeout=4000)
-            await confirm_btn.click()
-            log.info("  ✓ Confirmat fallback modal-container")
-            clicked_confirm = True
-        except PlaywrightTimeout:
-            # Dacă nu este modal-container, încercăm popover sau orice element cu text
-            try:
-                popover = page.locator("div.popover, div.tooltip, [class*='popover'], [class*='tooltip']").first
-                await popover.wait_for(state="visible", timeout=5000)
-                confirm_btn = popover.locator(
-                    "button:has-text('Dezactivează'), button:has-text('Dezactiveaza'), "
-                    "button:has-text('Activează'), button:has-text('Activeaza'), "
-                    "button:has-text('Confirmă'), button:has-text('Confirm'), "
-                    "a:has-text('Dezactivează'), a:has-text('Dezactiveaza'), "
-                    "a:has-text('Activează'), a:has-text('Activeaza'), "
-                    "a:has-text('Confirmă'), a:has-text('Confirm')"
-                ).first
-                await confirm_btn.wait_for(state="visible", timeout=4000)
-                await confirm_btn.click()
-                log.info("  ✓ Confirmat popover")
-                clicked_confirm = True
-            except PlaywrightTimeout:
-                # Ultim fallback: căutăm direct butonul în pagină după click
-                try:
-                    await page.wait_for_timeout(3000)  # așteptăm să apară
-                    confirm_btn = page.locator(
-                        "button:has-text('Dezactivează'), button:has-text('Dezactiveaza'), "
-                        "button:has-text('Activează'), button:has-text('Activeaza'), "
-                        "button:has-text('Confirmă'), button:has-text('Confirm'), "
-                        "a:has-text('Dezactivează'), a:has-text('Dezactiveaza'), "
-                        "a:has-text('Activează'), a:has-text('Activeaza'), "
-                        "a:has-text('Confirmă'), a:has-text('Confirm')"
-                    ).first
-                    await confirm_btn.wait_for(state="visible", timeout=4000)
-                    await confirm_btn.click()
-                    log.info("  ✓ Confirmat direct în pagină")
-                    clicked_confirm = True
-                except PlaywrightTimeout:
-                    log.warning("  ⚠️ Nu am găsit modal confirmare explicit")
-
-    if not clicked_confirm:
-        log.warning("  ⚠️ Nu am reușit sa confirm modificarea via modal. Verifică selectorii")
-
     # Așteptăm procesarea să se termine
     await page.wait_for_timeout(2000)
     try:
@@ -549,12 +398,10 @@ async def toggle_internet(page, action: str):
         processing_locator = page.locator("span:has-text('in procesare'), div:has-text('in procesare'), *:has-text('in procesare')").first
         await processing_locator.wait_for(state="visible", timeout=10000)  # wait up to 10s for it to appear
         log.info("  🔄 Procesare detectată")
-        await processing_locator.wait_for(state="hidden", timeout=60000)  # wait up to 60s for it to disappear
-        log.info("  ✅ Procesare terminată")
     except PlaywrightTimeout:
         log.warning("  ⚠️ Nu am detectat sau așteptat sfârșitul procesării")
 
-    await ss(page, f"08_{action}_done")
+    await ss(page, f"05_{action}_done")
 
     # Verificare finală
     try:
