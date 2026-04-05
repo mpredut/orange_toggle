@@ -18,6 +18,7 @@ import os
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from dotenv import load_dotenv
+from playwright_stealth import stealth_async
 
 load_dotenv()
 
@@ -35,7 +36,6 @@ log = logging.getLogger(__name__)
 EMAIL    = os.getenv("ORANGE_EMAIL",    "predut1978@gmail.com")
 PASSWORD = os.getenv("ORANGE_PASSWORD", "XXX")
 PHONE    = os.getenv("ORANGE_PHONE",    "0774004205")
-print({PASSWORD})
 
 BASE_URL  = "https://www.orange.ro"
 LOGIN_URL = f"{BASE_URL}/accounts/login-user"
@@ -75,11 +75,13 @@ async def login(page):
     # 2. Accept cookies (dacă apar)
     await accept_cookies(page)
 
+    await page.wait_for_timeout(3000)
+
     # 3. Așteaptă INPUT-UL REAL (cheia problemei)
     log.info("  Aștept câmpul de email (#EmailLogin)...")
     await ss(page, "test_1")
     email_input = page.locator("#EmailLogin")
-    await email_input.wait_for(state="visible", timeout=15000)
+    await email_input.wait_for(state="visible", timeout=30000)
     await ss(page, "test_2")
     # 4. Completează email
     await email_input.click(force=True)
@@ -90,7 +92,7 @@ async def login(page):
     # 5. Completează parola (direct, există deja în DOM)
     log.info("  Aștept câmpul de parolă (#PasswordLogin)...")
     password_input = page.locator("#PasswordLogin")
-    await password_input.wait_for(state="visible", timeout=10000)
+    await password_input.wait_for(state="visible", timeout=20000)
 
     await password_input.click()
     await password_input.fill(PASSWORD)
@@ -101,7 +103,7 @@ async def login(page):
     # 6. Click login (ID direct = 100% sigur)
     log.info("  Click login...")
     login_btn = page.locator("#loginBtn")
-    await login_btn.wait_for(state="visible", timeout=10000)
+    await login_btn.wait_for(state="visible", timeout=20000)
 
     await login_btn.click()
     await ss(page, "01_login_clicked")
@@ -109,11 +111,11 @@ async def login(page):
 
     # 7. Așteaptă navigare după login
     try:
-        await page.wait_for_load_state("domcontentloaded", timeout=15000)
+        await page.wait_for_load_state("domcontentloaded", timeout=20000)
     except:
         pass
 
-    await page.wait_for_timeout(5000)
+    await page.wait_for_timeout(10000)
 
     log.info(f"  URL după login: {page.url}")
     await ss(page, "01_after_login")
@@ -428,13 +430,14 @@ async def run(action: str):
         context = await browser.new_context(
             viewport={"width": 1366, "height": 768},
             user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "Mozilla/5.0 (X11; Linux x86_64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/122.0.0.0 Safari/537.36"
             ),
             locale="ro-RO",
         )
         page = await context.new_page()
+        await stealth_async(page)
         try:
             await login(page)
             await select_phone_number(page, PHONE)  # Exemplu de număr de telefon
