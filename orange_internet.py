@@ -18,7 +18,7 @@ import os
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from dotenv import load_dotenv
-from playwright_stealth import stealth_async
+from playwright_stealth import stealth
 
 load_dotenv()
 
@@ -437,7 +437,7 @@ async def run(action: str):
             locale="ro-RO",
         )
         page = await context.new_page()
-        await stealth_async(page)
+        await stealth(page)
         try:
             await login(page)
             await select_phone_number(page, PHONE)  # Exemplu de număr de telefon
