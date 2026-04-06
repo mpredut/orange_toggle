@@ -19,6 +19,8 @@ from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from dotenv import load_dotenv
 from playwright_stealth import stealth_async
+import json
+
 
 load_dotenv()
 
@@ -37,13 +39,15 @@ EMAIL    = os.getenv("ORANGE_EMAIL",    "predut1978@gmail.com")
 PASSWORD = os.getenv("ORANGE_PASSWORD", "XXX")
 PHONE    = os.getenv("ORANGE_PHONE",    "0774004205")
 
-BASE_URL  = "https://www.orange.ro"
-LOGIN_URL = f"{BASE_URL}/accounts/login-user"
-FOLDER    = os.path.dirname(os.path.abspath(__file__))
+BASE_URL     = "https://www.orange.ro"
+LOGIN_URL    = f"{BASE_URL}/accounts/login-user"
+FOLDER       = os.path.dirname(os.path.abspath(__file__))
+COOKIES_FILE = os.path.join(FOLDER, "orange_cookies.json")
 
 
 async def ss(page, name):
     path = os.path.join(FOLDER, "debug", f"debug_{name}.png")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     await page.screenshot(path=path, full_page=True)
     log.info(f"  📸 {path}")
 
@@ -66,88 +70,138 @@ async def accept_cookies(page):
             continue
 
 
+async def save_cookies(context):
+    cookies = await context.cookies()
+    with open(COOKIES_FILE, "w") as f:
+        json.dump(cookies, f)
+    log.info(f"  ✓ Cookies salvate ({len(cookies)} entries) → {COOKIES_FILE}")
+
+
+async def load_cookies(context):
+    if not os.path.exists(COOKIES_FILE):
+        log.info("  Niciun fișier cookies găsit.")
+        return False
+    with open(COOKIES_FILE) as f:
+        cookies = json.load(f)
+    await context.add_cookies(cookies)
+    log.info(f"  ✓ Cookies încărcate ({len(cookies)} entries)")
+    return True
+
+
 async def login(page):
     log.info("▶ STEP 1: Login")
 
-    # 1. Deschide pagina
     await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=40000)
-
-    # 2. Accept cookies (dacă apar)
     await accept_cookies(page)
-
     await page.wait_for_timeout(3000)
 
-    # 3. Așteaptă INPUT-UL REAL (cheia problemei)
     log.info("  Aștept câmpul de email (#EmailLogin)...")
     await ss(page, "test_1")
     email_input = page.locator("#EmailLogin")
-    await email_input.wait_for(state="visible", timeout=30000)
+    await email_input.wait_for(state="visible", timeout=10000)
     await ss(page, "test_2")
-    # 4. Completează email
+
     await email_input.click(force=True)
-    await email_input.fill(EMAIL)
+    await email_input.fill("")
+    await email_input.type(EMAIL, delay=80)
+    await email_input.dispatch_event("input")
+    await email_input.dispatch_event("change")
+    await email_input.press("Tab")
+    await page.wait_for_timeout(500)
     log.info("  ✓ Email completat")
     await ss(page, "test_3")
 
-    # 5. Completează parola (direct, există deja în DOM)
     log.info("  Aștept câmpul de parolă (#PasswordLogin)...")
     password_input = page.locator("#PasswordLogin")
     await password_input.wait_for(state="visible", timeout=20000)
 
     await password_input.click()
-    await password_input.fill(PASSWORD)
+    await password_input.fill("")
+    await password_input.type(PASSWORD, delay=80)
+    await password_input.dispatch_event("input")
+    await password_input.dispatch_event("change")
+    await password_input.press("Tab")
+    await page.wait_for_timeout(800)
     log.info("  ✓ Parola completată")
-
     await ss(page, "01_pass_filled")
 
-    # 6. Click login (ID direct = 100% sigur)
+    values = await page.evaluate("""
+        () => {
+            const e = document.querySelector('#EmailLogin');
+            const p = document.querySelector('#PasswordLogin');
+            const b = document.querySelector('#loginBtn');
+            return {
+                email: e?.value || null,
+                pass: p?.value ? 'OK' : null,
+                btnText: b?.textContent?.trim() || null,
+                btnDisabled: b?.disabled ?? null,
+                btnHasDisabledClass: b?.classList.contains('disabled') ?? null
+            };
+        }
+    """)
+    log.info(
+        f"  DOM after fill: "
+        f"email={'OK' if values['email'] else 'MISSING'}, "
+        f"pass={values['pass']}, "
+        f"btn='{values['btnText']}' "
+        f"disabled={values['btnDisabled']} "
+        f"disabled-class={values['btnHasDisabledClass']}"
+    )
+
     log.info("  Click login...")
     login_btn = page.locator("#loginBtn")
     await login_btn.wait_for(state="visible", timeout=20000)
 
-    await login_btn.click()
-    await ss(page, "01_login_clicked")
-    #print(await page.content())
+    btn_enabled = await login_btn.is_enabled()
+    log.info(f"  Buton enabled înainte de click: {btn_enabled}")
 
-    # 7. Așteaptă navigare după login
+    if not btn_enabled:
+        log.warning("  ⚠️ Buton dezactivat — încerc force click oricum...")
+
+    await ss(page, "01_before_click")
+    await login_btn.click(force=True)
+    log.info("  ✓ Click trimis (force=True)")
+    await ss(page, "01_login_clicked")
+    await page.wait_for_timeout(5000)
+
     try:
         await page.wait_for_load_state("domcontentloaded", timeout=20000)
-    except:
+    except Exception:
         pass
 
+    log.info("  Aștept 10 secunde pentru redirecționare...")
     await page.wait_for_timeout(10000)
+
+    if "login" in page.url.lower():
+        try:
+            await page.wait_for_selector(
+                "#abonament, #servicii, [href*='contul-meu']",
+                timeout=30000
+            )
+        except Exception:
+            log.warning("  ⚠️ Nu s-a detectat un element specific paginii după login")
+            await page.wait_for_timeout(30000)
 
     log.info(f"  URL după login: {page.url}")
     await ss(page, "01_after_login")
 
-    # 8. Verificare simplă (foarte important)
     if "login" in page.url.lower():
-        log.warning("⚠️ Încă pe pagina de login — posibil captcha sau eroare login")
+        log.warning("⚠️ Încă pe pagina de login — posibil captcha sau credențiale greșite")
     else:
-        log.info("✅ Login probabil reușit")
+        log.info("✅ Login reușit")
+
 
 async def select_phone_number(page, phone_number: str):
-    """
-    Selectează numărul de telefon din panelul 'Tip abonament'.
-    phone_number: ex. "0774004205"
-    """
     log.info(f"▶ STEP 2: Select phone number: {phone_number}")
-    
-    # Așteptăm panelul să apară (Angular îl randează async)
-    # Din screenshot, panelul are "Tip abonament" ca titlu
+
     try:
-        await page.wait_for_selector(
-            "text=abonament",
-            state="visible",
-            timeout=10000
-        )
+        await page.wait_for_selector("text=abonament", state="visible", timeout=10000)
         log.info("  ✓ Panel 'abonament' detectat")
     except PlaywrightTimeout:
         log.warning("  ⚠️ Panel 'abonament' nu a apărut")
 
     await ss(page, "02_phone_selector_panel")
 
-    # Strategia 1: caută direct după textul numărului de telefon
     try:
         phone_loc = page.locator(f"text={phone_number}").first
         await phone_loc.wait_for(state="visible", timeout=5000)
@@ -159,10 +213,7 @@ async def select_phone_number(page, phone_number: str):
     except PlaywrightTimeout:
         log.warning(f"  ⚠️ Nu am găsit text='{phone_number}' direct")
 
-    # Strategia 2: caută în cardurile de abonament
-    # Din screenshot, fiecare card are structura: avatar + nume + număr
     try:
-        # Găsim elementul părinte al numărului și dăm click pe card
         card = page.locator(f"div:has(p:text('{phone_number}'), span:text('{phone_number}'))").first
         await card.wait_for(state="visible", timeout=5000)
         await card.click()
@@ -173,14 +224,12 @@ async def select_phone_number(page, phone_number: str):
     except PlaywrightTimeout:
         log.warning("  ⚠️ Nu am găsit cardul cu numărul")
 
-    # Strategia 3: evaluate JS - caută elementul care conține textul și dă click
     try:
         clicked = await page.evaluate(f"""
             () => {{
                 const all = document.querySelectorAll('*');
                 for (const el of all) {{
                     if (el.children.length === 0 && el.textContent.trim() === '{phone_number}') {{
-                        // click pe părintele clickabil
                         let parent = el.parentElement;
                         for (let i = 0; i < 5; i++) {{
                             if (parent) {{
@@ -202,9 +251,10 @@ async def select_phone_number(page, phone_number: str):
     except Exception as e:
         log.warning(f"  ⚠️ JS evaluate failed: {e}")
 
-    await ss(page, "02_ERROR_phone_not_found")
+    await ss(page, "02_ERROR_selection_phone_not_found")
     log.error(f"  ✗ Nu am putut selecta numărul {phone_number}")
     return False
+
 
 async def go_to_servicii(page):
     log.info("▶ STEP 3: Navighez la Servicii")
@@ -212,13 +262,12 @@ async def go_to_servicii(page):
     log.info(f"  Direct URL: {url}")
     await page.goto(url, wait_until="domcontentloaded", timeout=15000)
     await page.wait_for_timeout(15000)
-
     await ss(page, "03_servicii")
 
 
 async def click_detalii_voce(page):
     log.info("▶ STEP 4: Click 'Detalii' pe cardul Voce")
-   
+
     for url in [
         f"{BASE_URL}/myaccount/reshape/services/voice",
         f"{BASE_URL}/my-orange/services/voice",
@@ -226,7 +275,6 @@ async def click_detalii_voce(page):
         log.info(f"  URL direct: {url}")
         await page.goto(url, wait_until="domcontentloaded", timeout=15000)
         if "voice" in page.url:
-            clicked = True
             break
 
     await page.wait_for_load_state("domcontentloaded", timeout=15000)
@@ -248,17 +296,15 @@ async def select_voce_tab(page):
     await page.wait_for_timeout(200)
     await ss(page, "05_voce_tab")
 
+
 async def confirm_modal(page, action: str):
-    """Confirmă modalul după click pe toggle (variantă stabilă Angular)."""
     log.info("  ▶ Aștept modal confirmare...")
 
-    # Texte posibile în funcție de acțiune
     if action == "enable":
         texts = ["Activeaza", "Activează", "Confirmă", "Confirm", "Da", "OK"]
     else:
         texts = ["Dezactiveaza", "Dezactivează", "Confirmă", "Confirm", "Da", "OK"]
 
-    # 1️⃣ Așteaptă modalul REAL
     try:
         dialog = page.locator("modal-container").first
         await dialog.wait_for(state="visible", timeout=8000)
@@ -268,7 +314,6 @@ async def confirm_modal(page, action: str):
         log.error("  ✗ Modalul nu a apărut!")
         return False
 
-    # 2️⃣ Caută buton DOAR în modal (IMPORTANT)
     for text in texts:
         try:
             btn = dialog.locator(f"button:has-text('{text}'), a:has-text('{text}')").first
@@ -279,27 +324,21 @@ async def confirm_modal(page, action: str):
         except PlaywrightTimeout:
             continue
 
-    # 3️⃣ Fallback inteligent (buton submit din modal)
     try:
         btn = dialog.locator("button[type='submit']").first
         await btn.wait_for(state="visible", timeout=3000)
-
         txt = await btn.text_content()
         log.info(f"  ✓ Fallback submit: '{txt}'")
-
         await btn.click()
         return True
     except PlaywrightTimeout:
         pass
 
-    # 4️⃣ Ultim fallback (primul buton vizibil din modal)
     try:
-        btn = dialog.locator("button").filter(has_text="").first
+        btn = dialog.locator("button").first
         await btn.wait_for(state="visible", timeout=3000)
-
         txt = await btn.text_content()
         log.warning(f"  ⚠️ Fallback generic button: '{txt}'")
-
         await btn.click()
         return True
     except PlaywrightTimeout:
@@ -309,21 +348,15 @@ async def confirm_modal(page, action: str):
     log.error("  ✗ Nu am putut confirma modalul!")
     return False
 
+
 async def toggle_internet(page, action: str):
-    """
-    Din screenshot 2: cardul 'Internet mobil' (primul din grid) are:
-      - text verde 'activ' + toggle portocaliu (checked)
-    Trebuie să găsim toggle-ul din primul card.
-    """
-    log.info(f"▶ STEP 5: Toggle Internet Mobil → {action.upper()}")
+    log.info(f"▶ STEP 6: Toggle Internet Mobil → {action.upper()}")
     await page.wait_for_timeout(2500)
 
-    # Găsim cardul "Internet mobil" — din screenshot titlul e h2/h3/div bold
     card = None
     for sel in [
         "div:has(> *:has-text('Internet mobil'))",
         "*:has-text('Este serviciul care iti permite sa navighezi')",
-        # fallback: primul card din grid-ul de servicii voce
         ".card:first-child",
         "article:first-child",
     ]:
@@ -336,14 +369,10 @@ async def toggle_internet(page, action: str):
         except PlaywrightTimeout:
             continue
 
-    # Găsim toggle-ul
     toggle = None
     search_in = card if card else page
 
-    for sel in [
-        "button.switch",
-        "#oro-service-modify",
-    ]:
+    for sel in ["button.switch", "#oro-service-modify"]:
         try:
             loc = search_in.locator(sel).first
             await loc.wait_for(state="attached", timeout=4000)
@@ -354,10 +383,9 @@ async def toggle_internet(page, action: str):
             continue
 
     if toggle is None:
-        await ss(page, "05_ERROR_no_toggle")
-        raise RuntimeError("Nu am găsit toggle-ul Internet mobil! Vezi debug_ERROR_no_toggle.png")
+        await ss(page, "06_ERROR_no_toggle")
+        raise RuntimeError("Nu am găsit toggle-ul Internet mobil!")
 
-    # Stare curentă
     try:
         cls = await toggle.get_attribute("class") or ""
         is_active = "on" in cls
@@ -369,43 +397,31 @@ async def toggle_internet(page, action: str):
 
     want_active = (action == "enable")
     if is_active == want_active:
-        log.info(f"  ℹ️  Deja în starea corectă. Nu e nevoie de acțiune.")
+        log.info("  ℹ️  Deja în starea corectă. Nu e nevoie de acțiune.")
         return
 
-    # Acționăm toggle-ul
-    log.info(f"  Click toggle...")
+    log.info("  Click toggle...")
     await toggle.scroll_into_view_if_needed()
     await toggle.click()
     await page.wait_for_timeout(2000)
-    await ss(page, "05_after_click_on_toggle")
+    await ss(page, "06_after_toggle_click")
 
-    await ss(page, "05_DEBUG_before_confirm_toggle")
+    confirm_ok = await confirm_modal(page, action)
+    if not confirm_ok:
+        log.warning("  ⚠️ Nu am reușit să confirm modificarea.")
 
-    # Dump toate butoanele vizibile
-    #buttons = page.locator("button:visible")
-    #count = await buttons.count()
-    #for i in range(count):
-    #    txt = await buttons.nth(i).text_content()
-    #     log.info(f"  Button[{i}]: '{txt}'")
-        
-    confirm_modal_result = await confirm_modal(page, action)
-    if not confirm_modal_result:
-        log.warning("  ⚠️ Nu am reușit să confirm modificarea. Verifică debug_ERROR_modal_not_confirmed.png")
-        #return
-    
-    # Așteptăm procesarea să se termine
     await page.wait_for_timeout(2000)
     try:
-        # Wait for "in procesare" to appear, then disappear
-        processing_locator = page.locator("span:has-text('in procesare'), div:has-text('in procesare'), *:has-text('in procesare')").first
-        await processing_locator.wait_for(state="visible", timeout=10000)  # wait up to 10s for it to appear
+        processing = page.locator(
+            "span:has-text('in procesare'), div:has-text('in procesare')"
+        ).first
+        await processing.wait_for(state="visible", timeout=10000)
         log.info("  🔄 Procesare detectată")
     except PlaywrightTimeout:
-        log.warning("  ⚠️ Nu am detectat sau așteptat sfârșitul procesării")
+        log.warning("  ⚠️ Nu am detectat procesarea")
 
-    await ss(page, f"05_{action}_done")
+    await ss(page, f"06_{action}_done")
 
-    # Verificare finală
     try:
         cls = await toggle.get_attribute("class") or ""
         final_active = "on" in cls
@@ -413,6 +429,42 @@ async def toggle_internet(page, action: str):
         log.info(f"  {'✅ SUCCES' if ok else '⚠️ ATENȚIE'}: stare finală {'ACTIV' if final_active else 'INACTIV'}")
     except Exception:
         log.info("  (Nu am putut verifica starea finală)")
+
+
+async def init_session():
+    """
+    Deschide browserul vizibil pe Windows, așteaptă login manual,
+    apoi salvează cookies pentru rulările automate.
+    """
+    log.info("▶ INIT SESSION — Loginează-te manual în browser")
+    log.info("  După login apasă Enter în terminal pentru a salva sesiunea.")
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=False,
+            slow_mo=0,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            locale="ro-RO",
+            viewport={"width": 1280, "height": 800},
+        )
+        page = await context.new_page()
+        await page.goto(LOGIN_URL)
+
+        log.info("  ⌛ Browserul e deschis. Loginează-te manual, apoi apasă Enter aici...")
+        await asyncio.get_event_loop().run_in_executor(None, input)
+
+        if "login" in page.url.lower():
+            log.error("  ✗ Încă pe pagina de login — sesiunea nu a fost salvată")
+        else:
+            await save_cookies(context)
+            log.info(f"  ✅ Sesiune salvată în {COOKIES_FILE}")
+            log.info("  Poți rula acum: python orange_internet.py enable/disable")
+
+        await browser.close()
 
 
 async def run(action: str):
@@ -423,29 +475,50 @@ async def run(action: str):
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=True,
+            headless=True,   # headless=True după ce ai sesiunea salvată
+            slow_mo=100,
             args=["--no-sandbox", "--disable-dev-shm-usage",
                   "--disable-blink-features=AutomationControlled"],
         )
         context = await browser.new_context(
-            viewport={"width": 1366, "height": 768},
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/122.0.0.0 Safari/537.36"
-            ),
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             locale="ro-RO",
+            viewport={"width": 1280, "height": 800},
         )
         page = await context.new_page()
         await stealth_async(page)
+
         try:
-            await login(page)
-            await select_phone_number(page, PHONE)  # Exemplu de număr de telefon
+            session_ok = await load_cookies(context)
+
+            if session_ok:
+                log.info("  Verific validitatea sesiunii...")
+                await page.goto(
+                    f"{BASE_URL}/myaccount/reshape/services/summary",
+                    wait_until="domcontentloaded",
+                    timeout=20000,
+                )
+                await page.wait_for_timeout(3000)
+                if "login" in page.url.lower():
+                    log.warning("  Cookies expirate — re-login necesar")
+                    session_ok = False
+
+            if not session_ok:
+                await login(page)
+                if "login" not in page.url.lower():
+                    await save_cookies(context)
+                else:
+                    raise RuntimeError("Login eșuat — cookies nu au fost salvate")
+
+            await select_phone_number(page, PHONE)
             await go_to_servicii(page)
             await click_detalii_voce(page)
             await select_voce_tab(page)
             await toggle_internet(page, action)
+
             log.info(f"\n✅ FINALIZAT: {action.upper()}")
+
         except Exception as e:
             log.error(f"\n❌ EROARE: {e}")
             await ss(page, "FATAL_ERROR")
@@ -455,7 +528,11 @@ async def run(action: str):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in ("enable", "disable"):
-        print("Utilizare: python orange_internet.py [enable|disable]")
+    if len(sys.argv) != 2 or sys.argv[1] not in ("enable", "disable", "init"):
+        print("Utilizare: python orange_internet.py [enable|disable|init]")
         sys.exit(1)
-    asyncio.run(run(sys.argv[1]))
+
+    if sys.argv[1] == "init":
+        asyncio.run(init_session())
+    else:
+        asyncio.run(run(sys.argv[1]))
